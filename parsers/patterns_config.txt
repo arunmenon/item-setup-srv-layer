@@ -1,0 +1,6 @@
+# parsers/patterns_config.txt
+enhanced_title:### Title Enhancement\s*\n\s*\*\*Enhanced Title\*\*:\s*(.+)
+enhanced_short_description:### Short Description Enhancement\s*\n\s*\*\*Enhanced Short Description\*\*:\s*(.+)
+enhanced_long_description:### Long Description Enhancement\s*\n\s*\*\*Enhanced Long Description\*\*:\s*(.+)
+extracted_attributes:### Attribute Extraction\s*\n\s*\*\*Extracted Attributes\*\*:\s*((?:- \*\*(?:Material|Color|Size|Sleeve Length)\*\*:\s*.+\n?)*)
+extracted_vision_attributes:### Vision Attribute Extraction\s*\n\s*\*\*Extracted Vision Attributes\*\*:\s*((?:- \*\*(?:Material|Color|Size|Sleeve Length)\*\*:\s*.+\n?)*)

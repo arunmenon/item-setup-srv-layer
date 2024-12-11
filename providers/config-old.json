@@ -1,0 +1,54 @@
+{
+    "providers": [
+      {
+        "name": "runpod_vllm1",
+        "provider": "runpod",
+        "model": "neuralmagic/Llama-3.2-1B-Instruct-quantized.w8a8",
+        "temperature": 0,
+        "endpoint_id": "vllm-0avhhxlcsy36tn"
+      },
+      {
+        "name": "runpod_vllm2",
+        "provider": "runpod",
+        "model": "neuralmagic/Llama-3.2-3B-Instruct-FP8-dynamic",
+        "temperature": 0,
+        "endpoint_id": "vllm-caiqtd1nirhws2"
+      }
+      
+    ],
+    "tasks": {
+      "title_enhancement": {
+        "max_tokens": 50,
+        "output_format": "json"
+      },
+      "short_description_enhancement": {
+        "max_tokens": 100,
+        "output_format": "json"
+      },
+      "long_description_enhancement": {
+        "max_tokens": 150,
+        "output_format": "json"
+      },
+      "attribute_extraction": {
+        "max_tokens": 300,
+        "output_format": "json"
+      },
+      "vision_attribute_extraction": {
+        "max_tokens": 500,
+        "output_format": "json"
+      }
+    },
+    
+  "task_execution": {
+    "default_tasks": [
+      "title_enhancement",
+      "short_description_enhancement",
+      "long_description_enhancement"
+    ],
+    "conditional_tasks": {
+      "attribute_extraction": "attributes_list",
+      "vision_attribute_extraction": "image_url"
+    }
+  }
+  }
+  
