@@ -1,6 +1,7 @@
 # app_factory.py
 import logging
 from fastapi import FastAPI, HTTPException
+from repositories.ae_inclusion_list_repo import AEInclusionListRepo
 from sqlalchemy.orm import sessionmaker
 from models.database import engine
 from entrypoint.task_manager import TaskManager
@@ -22,13 +23,16 @@ def create_app():
     # Initialize repositories
     styling_guide_repo = StylingGuideRepository(db_session)
     template_repo = TemplateRepository(db_session)
+    ae_inclusion_list_repo = AEInclusionListRepo(db_session)  # Initialize the AE inclusion repo
+
 
     # Initialize core managers
     task_manager = TaskManager(db_session)
     prompt_manager = PromptManager(styling_guide_repo, template_repo, task_manager)
     llm_manager = LLMManager(db_session)
     # Instantiate ItemEnricher with (prompt_manager, llm_manager)
-    item_enricher = ItemEnricher(prompt_manager, llm_manager)
+    # Pass ae_inclusion_list_repo to item_enricher if we want to filter attributes for AE tasks
+    item_enricher = ItemEnricher(prompt_manager, llm_manager, ae_inclusion_list_repo)
 
     # Adapters and Formatters
     request_adapter = LLMRequestAdapter()

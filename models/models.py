@@ -141,3 +141,17 @@ class TaskExecutionConfig(Base):
     conditional_tasks = Column(JSONEncodedDict, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+class AEInclusionList(Base):
+    __tablename__ = 'ae_inclusion_list'
+
+    id = Column(Integer, primary_key=True)
+    product_type = Column(String, nullable=False)
+    attribute_name = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('product_type', 'attribute_name', name='_pt_attr_uc'),
+    )    
