@@ -1,7 +1,3 @@
-Below is a revised README reflecting the current state of the codebase and describing the flow in detail, taking into account that the `HookManager` and related post-processing hooks have been removed for simplicity:
-
----
-
 # Gen AI Item Enrichment Serving Layer
 
 ## Overview
