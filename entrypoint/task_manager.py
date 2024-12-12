@@ -1,4 +1,5 @@
 # entrypoint/task_manager.py
+import json
 import logging
 from typing import Dict,Any,List
 from sqlalchemy.orm import Session
@@ -58,3 +59,28 @@ class TaskManager:
 
     def get_task_config(self, task_name: str, task_type: str) -> Dict[str,Any]:
         return self.tasks_config.get((task_name, task_type), {})
+    
+    def get_postprocess_hooks(self, task_name: str):
+        """
+        Returns a list of dicts: 
+        [
+          { "hook_type":..., "class_path":..., "parameters":..., "order_index":... },
+          ...
+        ]
+        """
+        sql = """
+        SELECT hook_type, class_path, parameters, order_index
+        FROM post_process_hooks_config
+        WHERE generation_task_name = :tname
+        ORDER BY order_index ASC
+        """
+        rows = self.db_session.execute(sql, {"tname": task_name}).fetchall()
+        hooks = []
+        for r in rows:
+            hooks.append({
+                "hook_type": r['hook_type'],
+                "class_path": r['class_path'],
+                "parameters": json.loads(r['parameters']),
+                "order_index": r['order_index']
+            })
+        return hooks

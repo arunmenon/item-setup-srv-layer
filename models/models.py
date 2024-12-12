@@ -148,10 +148,26 @@ class AEInclusionList(Base):
     id = Column(Integer, primary_key=True)
     product_type = Column(String, nullable=False)
     attribute_name = Column(String, nullable=False)
-    is_active = Column(Boolean, default=True)
+    certified = Column(Boolean, default=False)
+    attribute_precision_level = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         UniqueConstraint('product_type', 'attribute_name', name='_pt_attr_uc'),
     )    
+
+class PostProcessHooksConfig(Base):
+    __tablename__ = 'post_process_hooks_config'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    generation_task_name = Column(String, ForeignKey('generation_tasks.task_name'), nullable=False)
+    hook_type = Column(String, nullable=False)  # e.g. 'guardrail' or 'custom'
+    class_path = Column(String, nullable=False) # e.g. 'some.module.GuardrailClass' or 'my_hooks.ConformityCheckHook'
+    parameters = Column(JSONEncodedDict, nullable=False)
+    order_index = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    # Potential relationship to GenerationTask if needed
+    # generation_task = relationship('GenerationTask', backref='post_process_hooks')

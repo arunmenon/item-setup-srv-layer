@@ -1,19 +1,25 @@
 # entrypoint/item_enricher.py
 import logging
 from typing import Dict, Any
+from utils.dynamic_import import dynamic_import
+
 
 class ItemEnricher:
-    def __init__(self, prompt_manager, llm_manager, ae_inclusion_list_repo=None):
+    def __init__(self, prompt_manager, llm_manager,task_manager,db_session, ae_inclusion_list_repo=None):
         """
         Orchestrates item enrichment by generating prompts (PromptManager) and invoking LLMs (LLMManager).
 
         Args:
-            prompt_manager: Instance of PromptManager for generating prompts.
-            llm_manager: Instance of LLMManager for invoking language models.
-            ae_inclusion_list_repo: Optional repository to fetch allowed attributes for items.
+            prompt_manager: PromptManager instance
+            llm_manager: LLMManager instance
+            task_manager: TaskManager instance
+            db_session: SQLAlchemy session
+            ae_inclusion_list_repo: AEInclusionListRepository instance or None
         """
         self.prompt_manager = prompt_manager
         self.llm_manager = llm_manager
+        self.task_manager = task_manager
+        self.db_session = db_session
         self.ae_inclusion_list_repo = ae_inclusion_list_repo
         self.logger = logging.getLogger(__name__)
 
@@ -22,9 +28,10 @@ class ItemEnricher:
         Enriches the given item by generating prompts and calling LLMs.
 
         Steps:
-        1. Preprocess attributes (filter or set them if not present).
-        2. Generate prompts per family.
-        3. Invoke LLMs and process responses.
+        1. Preprocess attributes (if AEInclusionListRepository is set, fetch certified attributes).
+        2. Generate prompts per model family.
+        3. Invoke LLMs and parse responses.
+        4. Apply postprocessing hooks if any.
 
         Args:
             item (Dict[str, Any]): A dictionary containing product details (title, desc, product_type, etc.).
@@ -55,6 +62,13 @@ class ItemEnricher:
 
         # Step 3: Invoke LLMs and process results
         results = await self._invoke_llms(prompts_tasks)
+
+        # Step 4: If generation task, apply post process hooks
+        # Postprocessing (guardrails + custom hooks) only for generation tasks
+        if task_type == 'generation':
+            results = self._apply_postprocess_hooks(results)
+        
+
         processed_results = self._process_results(results, task_to_format)
         return processed_results
 
@@ -68,18 +82,19 @@ class ItemEnricher:
             item (Dict[str, Any]): Item dictionary containing product information.
         """
         product_type = item.get('product_type', 'unknown')
-        included_attrs = self.ae_inclusion_list_repo.get_included_attributes(product_type)
+        # Only certified attributes, assume no precision filtering for now.
+        certified_attrs = self.ae_inclusion_list_repo.get_certified_attributes(product_type=product_type)
 
         if 'attributes_list' in item:
             # Filter existing attributes to the allowed subset
             original_attrs = item['attributes_list']
-            filtered_attrs = [a for a in original_attrs if a.lower() in included_attrs]
+            filtered_attrs = [a for a in original_attrs if a.lower() in certified_attrs]
             item['attributes_list'] = filtered_attrs
             self.logger.debug(f"Filtered attributes for product_type='{product_type}'. "
                               f"Original={original_attrs}, Filtered={filtered_attrs}")
         else:
             # No attributes_list provided, assign the full inclusion list as the default
-            full_attrs = list(included_attrs)  # convert set to list if needed
+            full_attrs = list(certified_attrs)  # convert set to list if needed
             item['attributes_list'] = full_attrs
             self.logger.debug(f"No attributes_list provided. Assigned full inclusion list: {full_attrs}")
 
@@ -164,3 +179,82 @@ class ItemEnricher:
         except Exception as e:
             self.logger.error(f"Parsing failed for task '{task}', handler '{handler_name}': {e}", exc_info=True)
             return {'handler_name': handler_name, 'error': 'Parsing failed'}
+
+    def _apply_postprocess_hooks(self, results):
+        # Retrieve hooks (both guardrail and custom) from a single source
+        # For each task, get the hooks, apply them in order
+        for task_name, handlers_map in results.items():
+            if not self.task_manager.is_task_defined(task_name, 'generation'):
+                continue
+            hooks = self.task_manager.get_postprocess_hooks(task_name)  
+            if not hooks:
+                continue
+            # Apply each hook
+            for handler_name, resp in handlers_map.items():
+                if resp.get('error'):
+                    continue
+                content = resp.get('response')
+                if not content:
+                    continue
+                for hook_def in hooks:
+                    hook_type = hook_def['hook_type']
+                    class_path = hook_def['class_path']
+                    params = hook_def['parameters']
+                    cls = dynamic_import(class_path)
+                    hook_instance = cls(**params)
+                    try:
+                        if hook_type == 'guardrail':
+                            # assume hook_instance has a validate method
+                            hook_instance.validate(content)
+                        else:
+                            # custom hook - assume apply method
+                            content = hook_instance.apply(content)
+                            resp['response'] = content
+                    except Exception as e:
+                        self.logger.error(f"Postprocess hook failed for task '{task_name}': {e}", exc_info=True)
+                        resp['error'] = str(e)
+                        break
+        return results
+    """
+    Hooks Usage .... 
+    """
+    
+    """
+    class NormalizationHook:
+        def __init__(self, method="lowercase"):
+            self.method = method
+        def apply(self, value: str) -> str:
+            return value.lower() if self.method == "lowercase" else value
+    """
+    """
+    class ConformityHook:
+    def __init__(self, ensure_period=True):
+        self.ensure_period = ensure_period
+    def apply(self, value: str) -> str:
+        if self.ensure_period and not value.endswith('.'):
+            return value.strip() + '.'
+        return value
+
+    """
+    """
+    Insert them into post_process_hooks_config
+
+    INSERT INTO post_process_hooks_config(generation_task_name, hook_type, class_path, parameters, order_index)
+    VALUES('title_enhancement', 'custom', 'my_custom_hooks.NormalizationHook', '{"method": "lowercase"}', 1);
+
+    INSERT INTO post_process_hooks_config(generation_task_name, hook_type, class_path, parameters, order_index)
+    VALUES('title_enhancement', 'custom', 'my_custom_hooks.ConformityHook', '{"ensure_period": true}', 2);
+
+    
+    """
+
+    """
+    For guardrails:
+
+    INSERT INTO post_process_hooks_config(generation_task_name, hook_type, class_path, parameters, order_index)
+    VALUES('title_enhancement', 'custom', 'my_custom_hooks.NormalizationHook', '{"method": "lowercase"}', 1);
+
+    INSERT INTO post_process_hooks_config(generation_task_name, hook_type, class_path, parameters, order_index)
+    VALUES('title_enhancement', 'custom', 'my_custom_hooks.ConformityHook', '{"ensure_period": true}', 2);
+
+    """
