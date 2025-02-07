@@ -1,149 +1,223 @@
-# Gen AI Item Enrichment Serving Layer
+# **Gen AI Item Enrichment API - README**
 
-## Overview
+## **Table of Contents**
 
-This repository provides a configurable and extensible serving layer for enhancing product-related data (e.g., titles, attributes) using LLM-based generation and evaluation tasks. The serving layer orchestrates:
+1. [High-Level Overview](#high-level-overview)  
+2. [Item Enricher Flow](#item-enricher-flow)  
+3. [Prompt Manager & Template Flow](#prompt-manager--template-flow)  
+4. [Caching (Megacache) Details](#caching-megacache-details)  
+   - [Key Hierarchies](#key-hierarchies)  
+   - [Cache Wrappers](#cache-wrappers)  
+   - [Examples of Cache Usage](#examples-of-cache-usage)  
+5. [Database Toggle (SQLite vs. Azure SQL)](#database-toggle-sqlite-vs-azure-sql)  
+6. [Design Rationale (Pros & Cons)](#design-rationale-pros--cons)  
+7. [Getting Started](#getting-started)
 
-1. Retrieving and preparing item data.
-2. Generating prompts based on styling guides and templates.
-3. Invoking configured LLM providers.
-4. Parsing and validating responses using guardrails.
-5. Integrating attribute inclusion logic for certain tasks (like attribute extraction).
+---
 
-All configurations—tasks, templates, guardrails, providers—are stored in a database, making the system highly dynamic and adaptable without code changes.
+## **1. High-Level Overview**
 
-## Key Components
+This API enriches item data by:
 
-### Data Layer and Models
+1. **Fetching** product attributes/specs (AE scope data), style guides, and prompt templates from a database (SQLite in dev or Azure SQL in prod).  
+2. **Optionally retrieving** them from **Megacache** (memcached) if `USE_CACHE=True`.  
+3. **Generating** prompts via `PromptManager` and an LLM (OpenAI, etc.).  
+4. **Applying** post-processing hooks or validations (guardrails).  
+5. **Returning** the final enriched result.
 
-- **Database:**  
-  Stores all configurations and resources: tasks, templates, styling guides, LLM providers, and attribute inclusion lists.
-  
-- **SQLAlchemy ORM and Models (in `models/`):**  
-  Defines ORM models such as:
-  - `GenerationTask` and `EvaluationTask` for task definitions.
-  - `ModelFamily`, `ProviderConfig` for model/provider configuration.
-  - `StylingGuide` for editorial constraints.
-  - `AEInclusionList` for certified attributes.
-  - `TaskExecutionConfig` for default/conditional tasks.
-  
-- **Repositories (in `repositories/`):**  
-  Encapsulate data access and business logic. For example:
-  - `StylingGuideRepository` fetches styling guides.
-  - `TemplateRepository` fetches templates.
-  - `AEInclusionListRepository` fetches certified attributes for attribute extraction tasks.
+Core modules:
+- **ItemEnricher**: Orchestrates the entire process.  
+- **PromptManager**: Builds a Jinja2 prompt context (including style guides, attribute definitions).  
+- **TemplateRepository**: Fetches template text from the DB (or cache).  
+- **Megacache**: Speeds up repeated lookups for AE data, style guides, templates, etc.
 
-### Managers
+---
 
-- **TaskManager:**  
-  - Loads task configurations (both generation and evaluation).
-  - Provides default and conditional tasks to run based on item attributes or conditions.
-  - Offers easy retrieval of task-related metadata (max_tokens, output_format).
-  
-- **PromptManager:**  
-  - Uses `StylingGuideRepository` and `TemplateRepository` to generate prompts.
-  - Interprets item data and tasks to produce prompts tailored to the LLM and the `task_type`.
-  - Considers `TaskExecutionConfig` to determine which tasks to run.
+## **2. Item Enricher Flow**
 
-- **LLMManager:**  
-  - Loads and configures LLM providers (from `ProviderConfig`)—these can be OpenAI, local models, etc.
-  - Initializes `BaseModelHandler` instances for each provider.
-  - Maps model families to providers and tasks, enabling the system to dynamically select the correct LLM backend.
+The **`ItemEnricher`** is where everything **comes together**. A typical call (e.g., via `/enrich-item`) looks like this:
 
-- **ItemEnricher:**  
-  - The central orchestrator that:
-    1. Preprocesses item data if needed (e.g., filtering attributes via `AEInclusionListRepository`).
-    2. Uses `PromptManager` to generate prompts for specified tasks.
-    3. Invokes the LLMs through `LLMManager` and gathers responses.
-    4. Applies guardrails to validate and filter responses as per the configured tasks.
-  - Returns processed, validated LLM responses.
+1. **Load AE Data**  
+   - `ItemEnricher` calls `ae_scope_list_repo.get_certified_attributes(product_type)` to find all relevant attributes.  
+   - It also calls `get_attribute_spec(product_type, attr)` for each attribute to retrieve a dictionary with fields like `closed_list`, `multi_select`, etc.  
+   - **Caching**: The repository might check Megacache first (e.g., key = `spec_<product_type>_<attr_name>`). If `USE_CACHE=False`, it hits the DB directly.  
+   - The loaded data is stored in `item["attributes_list"]` and `item["attribute_spec_list"]`.
 
-### Adapters and Formatters
+2. **Generate Prompts**  
+   - Next, `ItemEnricher` calls `PromptManager.generate_prompts(...)`.  
+   - The `PromptManager` in turn fetches:
+     - **Style Guides** (via `styling_guide_repo.get_styling_guide(product_type, task)` → possibly cached).  
+     - **Templates** (via `template_repo.get_template_text(task_name, ... )` → possibly cached).  
+   - Using these, the `PromptManager` builds a **Jinja2** context (including `attribute_definition_list` or a subset of the specs) and renders the final prompt strings.
 
-- **LLMRequestAdapter:**  
-  Adapts raw incoming HTTP request bodies to the internal `item` dictionary and `task_type` format that `ItemEnricher` expects. If the input schema changes, you update or replace the adapter.
+3. **Invoke LLMs**  
+   - The prompts are sent to LLM providers concurrently.  
+   - `ItemEnricher._invoke_llms()` calls each provider with the final prompt.
 
-- **DefaultJSONResponseFormatter:**  
-  Formats the final results into a JSON structure suitable for the API response. If the output schema changes, swap or modify this formatter.
+4. **Apply Hooks** (Post-processing)  
+   - If hooks (like guardrails) are defined for certain tasks, `ItemEnricher._apply_postprocess_hooks()` runs them on the JSON output.  
+   - Example: If `closed_list` is `True`, a guardrail might verify the LLM’s extracted value is in `acceptable_values`.
 
-### Guardrails
+5. **Return Enriched Result**  
+   - A structured dictionary with fields like `title_enrichment`, `attributes_enrichment`, etc., is returned to the client.
 
-- While the current codebase does not show direct integration of guardrails as a separate repository or config table, the `ItemEnricher` includes a placeholder `_apply_guardrails` step:
-  - If a generation task requires guardrails (like profanity checks, bias checks), you would:
-    1. Insert guardrail configuration in a database table.
-    2. `ItemEnricher` loads and applies these validators after receiving LLM responses.
-  
-  By default, there might not be any guardrails if not configured. If added in the future, the code can dynamically load guardrail classes and apply them to responses.
+**Why This Flow?**  
+- We keep all steps in **one** place (`ItemEnricher`) so it’s easy to see how data is fetched, processed, and validated.
 
-### AE Inclusion Logic
+---
 
-For attribute extraction tasks, we often need a certified attribute list:
+## **3. Prompt Manager & Template Flow**
 
-- **AEInclusionListRepository:**
-  - If `attributes_list` is in the input item, filter it to only certified attributes.
-  - If `attributes_list` not provided, assign all certified attributes from the AE inclusion list.
-  
-This ensures the LLM only works with a validated subset of attributes, improving result quality.
+**`PromptManager`** is responsible for:
 
-## Workflow Summary
+1. Deciding **which tasks** to run (based on `TaskManager`).  
+2. **Fetching style guides** for `(product_type, task)` from `StylingGuideRepository`.  
+3. **Fetching prompt templates** from `TemplateRepository`.  
+4. **Building context** (including `item["attributes_list"]`, partial specs, etc.) and rendering the final Jinja2 prompt.
 
-1. **Incoming Request**:  
-   A request comes in (e.g., `POST /enrich-item`) with JSON containing item details and a `task_type`.
+A typical chain is:
 
-2. **Request Adaptation**:  
-   `LLMRequestAdapter` transforms the raw request body into `(item, task_type)` that the system can handle.
+1. `PromptManager.generate_prompts(item, family_name, task_type)`  
+2. For each task:
+   - Calls `styling_guide_repo.get_styling_guide(...)` -> might check the cache key `style_guide_{task}_{pt}`.  
+   - Calls `template_repo.get_template_text(task_name, task_type, family_name)` -> might check the cache key `prompt_template_{task}_{task_type}_{family_name}`.  
+   - **Combines** them in `_prepare_context()`, which can also incorporate a minimal `attribute_definition_list` from `item["attribute_spec_list"]`.  
+   - Renders the final prompt string using Jinja2.
 
-3. **ItemEnricher Execution**:  
-   - **Preprocessing (Attributes)**: If `AEInclusionListRepository` is configured and the task relates to attributes, filter or set `item['attributes_list']`.
-   - **Prompt Generation**:  
-     `PromptManager` uses styling guides and templates to build prompts for each task determined by `TaskManager`.  
-     `TaskManager` checks `task_execution_config` to figure out which tasks to run.
-   - **LLM Invocation**:  
-     `LLMManager` finds appropriate providers and sends prompts. `ItemEnricher` awaits responses, collecting them by `(task, handler)`.
-   - **Guardrails (If Configured)**:  
-     If guardrails are defined for a generation task, the `ItemEnricher` applies them to ensure output quality and safety.
-   
-4. **Response Parsing**:  
-   The system uses `ParserFactory` (not shown in detail here) to parse LLM responses according to `output_format`.
-   
-5. **Response Formatting**:  
-   The final structured results are then passed to `DefaultJSONResponseFormatter`, returning a clean JSON response to the client.
+**Pros**:  
+- Clear separation of “where we get data from” (repos) vs. “how we assemble context” (PromptManager).  
+- The template repository is similarly cached, so each unique `(task, type, model_family)` fetch is quick.
 
-## Configuration and Extension
+---
 
-### Adding a New Task
+## **4. Caching (Megacache) Details**
 
-1. Insert a row into `generation_tasks` or `evaluation_tasks` defining `task_name`, `max_tokens`, `output_format`.
-2. Insert corresponding `prompt_template` rows in `generation_prompt_templates` or `evaluation_prompt_templates`.
-3. Update `task_execution_config` to include the new task in default or conditional tasks if needed.
+### **4.1 Key Hierarchies**
 
-### Changing Models or Providers
+We store data in **memcache** using flattened string keys. Examples:
 
-- Add or update rows in `providers` and `model_families` tables.
-- `LLMManager` loads these automatically at startup, no code change needed.
+1. **AE Scope** (attributes & specs)  
+   - `spec_<pt>` -> list of attributes for `<pt>`.  
+   - `spec_<pt>_<attr>` -> the full spec for a single attribute.  
+   - E.g., `spec_Athletic|Shoes_color` might store a JSON dict with `closed_list`, `acceptable_values`, etc.
 
-### Integrating Guardrails
+2. **Style Guides**  
+   - `style_guide_<task>_<pt>` -> the textual guide.  
+   - E.g., `style_guide_desc_generation_Athletic|Shoes`.
 
-- Once the guardrail configuration table and logic are in place, simply add a row mapping a `generation_task` to the guardrail class and parameters.
-- `ItemEnricher` will dynamically load and apply them after LLM responses are retrieved.
+3. **Templates**  
+   - `prompt_template_<task_name>_<task_type>_<model_family>` -> the actual prompt text.  
+   - E.g., `prompt_template_desc_generation_default_defaultFamily`.
 
-### Adjusting Input/Output Schemas
+**Why Flatten?**  
+- Memcache is a **flat key-value store**. We replace spaces with `|` or `_` to keep it consistent.
 
-- Update `LLMRequestAdapter` to handle new fields in the input request body.
-- Update `DefaultJSONResponseFormatter` if output fields or structure need changing.
+### **4.2 Cache Wrappers**
 
-### Attribute Extraction Tuning
+For each repository, we have a **cached** wrapper:
 
-- Insert rows in `ae_inclusion_list` for the desired `product_type`.
-- Set `certified=1` for attributes you want to include. Optionally specify `attribute_precision_level`.
-- `ItemEnricher` will automatically apply this logic when dealing with tasks that relate to attributes.
+- **CachedAEScopeListRepository** → tries keys like `spec_<pt>_<attr>`.  
+- **CachedStylingGuideRepository** → tries keys like `style_guide_{task}_{pt}`.  
+- **CachedTemplateRepository** → tries keys like `prompt_template_{task_name}_{task_type}_{family}`.
 
-## Performance and Scaling
+Each wrapper:
 
-- Connection pooling and indexing at the DB layer.
-- Horizontal scaling by running multiple app instances behind a load balancer.
-- Add caching layers if prompt generation or style guides retrieval become bottlenecks.
+1. Checks `config.USE_CACHE`. If `False`, skip the cache.  
+2. If `True`, does `cache_service.get(key)` first.  
+3. On a **miss**, calls the original DB-based repo, then `cache_service.set(key, data)`.
 
-## Conclusion
+### **4.3 Examples of Cache Usage**
 
-This serving layer is flexible, data-driven, and highly configurable. By storing configurations in the database and using adapters and managers, you can easily evolve tasks, templates, models, guardrails, and attributes logic without modifying the core code.
+**During `_process_attributes()`** in ItemEnricher:  
+```python
+attrs = ae_scope_list_repo.get_certified_attributes(pt)  
+# -> tries key: spec_<pt> in Megacache
+
+for attr in attrs:
+    spec = ae_scope_list_repo.get_attribute_spec(pt, attr)
+    # -> tries key: spec_<pt>_<attr>
+```
+**During PromptManager**:  
+```python
+style_guide = styling_guide_repo.get_styling_guide(pt, task)
+# -> key: style_guide_{task}_{pt}
+
+template_text = template_repo.get_template_text(task_name, task_type, family_name)
+# -> key: prompt_template_{task_name}_{task_type}_{family_name}
+```
+
+---
+
+## **5. Database Toggle (SQLite vs. Azure SQL)**
+
+We rely on a single **`DATABASE_URL`** in `config.py`. For example:
+
+- **Local Dev** (default):  
+  ```
+  DATABASE_URL="sqlite:///results.db"
+  ```
+- **Azure SQL** (Staging/Prod):  
+  ```
+  DATABASE_URL="mssql+pyodbc://username:password@server.database.windows.net:1433/dbname?driver=ODBC+Driver+17+for+SQL+Server"
+  ```
+
+When the app boots, we call `create_engine(config.DATABASE_URL)`. Everything else (like repository calls, `ItemEnricher`, caching) stays the same. We can seamlessly switch between DBs by changing the environment variable—**no code changes** required.
+
+---
+
+## **6. Design Rationale (Pros & Cons)**
+
+### **Caching Strategy**
+
+- **Pros**:
+  - Speeds up repeated lookups (especially for large sets of attribute specs).  
+  - Easy on/off toggle (`USE_CACHE`).  
+  - Minimal changes to the main code flow, just wrap the repositories.
+- **Cons**:
+  - If data updates often, risk of stale cache if not invalidated quickly.  
+  - Must carefully define keys (flattening PT, tasks, etc.).
+
+### **Database Toggle**
+
+- **Pros**:
+  - Single codebase for dev (SQLite) vs. prod (Azure).  
+  - No branching logic or environment-specific classes.  
+- **Cons**:
+  - Must install the correct ODBC driver & handle potential T-SQL differences.  
+  - Must ensure both DBs have the same schema.
+
+### **PromptManager & Templates**
+
+- **Pros**:
+  - Clear separation: fetch style guides/templates in one place, build a Jinja2 context, and render.  
+  - Easy to add new tasks or placeholders.  
+- **Cons**:
+  - Another layer for devs to learn (context building, Jinja templates).
+
+### **ItemEnricher Flow**
+
+- **Pros**:
+  - Single orchestrator that’s easy to trace: from AE data fetching to LLM calls.  
+  - Hooks allow flexible post-processing.  
+- **Cons**:
+  - If the flow grows more complex, might need to break out specialized pipelines or sub-steps.
+
+---
+
+## **7. Getting Started**
+
+1. **Clone** the repository and install dependencies (`pip install -r requirements.txt`).  
+2. **Local Dev**:
+   - If no environment variable is set, we default to `sqlite:///results.db`.  
+   - `USE_CACHE` can be `False` to debug caching logic.  
+   - Run `uvicorn main:app --reload` and test at http://127.0.0.1:8000/docs.
+3. **Staging/Prod**:
+   - Set `DATABASE_URL` to your Azure SQL connection string.  
+   - `export USE_CACHE=true` if you want caching.  
+   - Deploy the same code; no other modifications needed.
+
+**Flow**:
+- Send a `POST /enrich-item` with a JSON body containing `title`, `short_desc`, `long_desc`, `product_type`, etc.  
+- The response includes enriched fields (`title_enrichment`, etc.), possibly referencing style guides and attribute specs from the DB or cache.
+
+**That’s it!** Junior devs can now see exactly how the **ItemEnricher** retrieves AE data from Megacache/DB, uses **PromptManager** to render templates, and returns the final results. If you have any questions on key naming or hooking in new data sources, you can follow the same patterns in the **cached wrappers** or the **managers**.
