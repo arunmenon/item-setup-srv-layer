@@ -62,6 +62,15 @@ class PromptManager:
         Prepares the context for prompt rendering.
         In addition to basic fields, it includes attribute specifications.
         """
+        # Iterate over all attribute specs, extracting only "definition"
+        raw_spec_list = item.get('attribute_spec_list', {})
+        attribute_definition_list = {}
+
+        # Iterate over all attribute specs, extracting only "definition"
+        for attr_name, attr_spec_data in raw_spec_list.items():
+        # We assume "definition" is the field in spec_data that the prompt needs
+            attr_definition = attr_spec_data.get("definition")  # None if absent
+            attribute_definition_list[attr_name] = attr_definition
         context = {
             'styling_guide': styling_guide,
             'original_title': item.get('item_title', ''),
@@ -70,6 +79,7 @@ class PromptManager:
             'product_type': product_type,
             'image_url': item.get('image_url', ''),
             'attributes_list': item.get('attributes_list', []),
+            'attribute_definition_list': attribute_definition_list,
             'attribute_spec_list': item.get('attribute_spec_list', {}),
             'output_format': 'json'
         }
