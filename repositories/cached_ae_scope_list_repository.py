@@ -1,3 +1,4 @@
+# repositories/cached_ae_scope_list_repository.py
 import config
 
 class CachedAEScopeListRepository:
@@ -5,13 +6,12 @@ class CachedAEScopeListRepository:
         """
         Args:
             inner_repo: The original AEScopeListRepository instance (DB-based).
-            cache_service: A wrapper providing 'get(key)' and 'set(key, value)' for memcache.
+            cache_service: A memcache wrapper (get(key), set(key, value)).
         """
         self.inner_repo = inner_repo
         self.cache_service = cache_service
 
     def get_certified_attributes(self, product_type: str):
-        """Returns a list of certified attribute names, first checking the cache if USE_CACHE is True."""
         if not config.USE_CACHE:
             return self.inner_repo.get_certified_attributes(product_type)
 
@@ -20,14 +20,12 @@ class CachedAEScopeListRepository:
         if cached_list is not None:
             return cached_list
 
-        # Cache miss -> fetch from DB
         attrs = self.inner_repo.get_certified_attributes(product_type)
         if attrs:
             self.cache_service.set(cache_key, attrs)
         return attrs
 
     def get_attribute_spec(self, product_type: str, attribute_name: str):
-        """Returns the spec for a given (product_type, attribute_name)."""
         if not config.USE_CACHE:
             return self.inner_repo.get_attribute_spec(product_type, attribute_name)
 
@@ -36,7 +34,7 @@ class CachedAEScopeListRepository:
         if cached_spec is not None:
             return cached_spec
 
-        # Cache miss
+        # Miss
         spec_data = self.inner_repo.get_attribute_spec(product_type, attribute_name)
         if spec_data:
             self.cache_service.set(cache_key, spec_data)
