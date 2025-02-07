@@ -8,13 +8,7 @@ class DefaultJSONResponseFormatter:
     def format(self, results):
         """
         Formats the results into a JSON-friendly structure.
-        Currently just returns results as is, but could be extended.
-
-        Args:
-            results (dict): processed results from ItemEnricher.
-
-        Returns:
-            dict: formatted results
+        Currently returns the results as-is.
         """
         self.logger.debug("Formatting results for response.")
         return results

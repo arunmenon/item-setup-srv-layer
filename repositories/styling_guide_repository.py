@@ -9,8 +9,7 @@ class StylingGuideRepository:
 
     def fetch_active_styling_guides(self) -> Dict[str, Dict[str, str]]:
         """
-        Returns a dict:
-        { product_type: {task_name: content} }
+        Returns a dict mapping product types to a dict of {task_name: styling guide content}.
         """
         styling_guides = self.db_session.query(StylingGuide).filter_by(is_active=True).all()
         result = {}
@@ -23,12 +22,7 @@ class StylingGuideRepository:
             result[product_type][task_name] = content
         return result
 
-    def get_styling_guide(self, product_type: str, task_name: str) -> str:
-        """
-        If direct access needed in future. Not used now since we load from the manager.
-        """
-        # For direct queries without cache
-        sg = self.db_session.query(StylingGuide).filter_by(product_type=product_type, task_name=task_name, is_active=True).first()
-        if sg:
-            return sg.content.strip()
-        return ""
+    def get_styling_guide(self, product_type: str, task: str) -> str:
+        guides = self.fetch_active_styling_guides()
+        product_guides = guides.get(product_type.lower(), {})
+        return product_guides.get(task.lower(), "")

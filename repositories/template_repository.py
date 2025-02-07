@@ -1,13 +1,11 @@
 # repositories/template_repository.py
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from models.models import ModelFamily, GenerationTask, EvaluationTask, GenerationPromptTemplate, EvaluationPromptTemplate
-from jinja2 import Environment, exceptions
+from models.models import GenerationPromptTemplate, EvaluationPromptTemplate, GenerationTask, EvaluationTask, ModelFamily
 
 class TemplateRepository:
     def __init__(self, db_session: Session):
         self.db_session = db_session
-        self.jinja_env = Environment()
 
     def get_template_text(self, task_name: str, task_type: str, model_family_name: Optional[str]) -> Optional[str]:
         if model_family_name:
@@ -43,8 +41,10 @@ class TemplateRepository:
         return None
 
     def render_template(self, template_content: str, context: Dict[str, Any]) -> Optional[str]:
+        from jinja2 import Environment, exceptions
         try:
-            template = self.jinja_env.from_string(template_content)
+            env = Environment()
+            template = env.from_string(template_content)
             return template.render(context)
-        except exceptions.TemplateError:
+        except exceptions.TemplateError as e:
             return None

@@ -2,7 +2,7 @@
 import logging
 from fastapi import FastAPI, HTTPException
 from managers.hook_manager import HookManager
-from repositories.ae_inclusion_list_repository import AEInclusionListRepo, AEInclusionListRepository
+from repositories.ae_scope_list_repository import AEScopeListRepository
 from sqlalchemy.orm import sessionmaker
 from models.database import engine
 from entrypoint.task_manager import TaskManager
@@ -17,6 +17,7 @@ from repositories.template_repository import TemplateRepository
 def create_app():
     """
     Factory function to create and configure the FastAPI application.
+    This layer isolates framework‐specific code for future flexibility.
     """
     SessionLocal = sessionmaker(bind=engine)
     db_session = SessionLocal()
@@ -24,16 +25,15 @@ def create_app():
     # Initialize repositories
     styling_guide_repo = StylingGuideRepository(db_session)
     template_repo = TemplateRepository(db_session)
-    ae_inclusion_list_repo = AEInclusionListRepository(db_session)
+    ae_scope_list_repo = AEScopeListRepository(db_session)
     hook_manager = HookManager(db_session)
 
     # Initialize core managers
     task_manager = TaskManager(db_session)
     prompt_manager = PromptManager(styling_guide_repo, template_repo, task_manager)
     llm_manager = LLMManager(db_session)
-    # Instantiate ItemEnricher with (prompt_manager, llm_manager)
-    # Pass ae_inclusion_list_repo to item_enricher if we want to filter attributes for AE tasks
-    item_enricher = ItemEnricher(prompt_manager, llm_manager,task_manager,db_session, ae_inclusion_list_repo,hook_manager)
+    # Instantiate ItemEnricher with the repositories and managers.
+    item_enricher = ItemEnricher(prompt_manager, llm_manager, task_manager, db_session, ae_scope_list_repo, hook_manager)
 
     # Adapters and Formatters
     request_adapter = LLMRequestAdapter()
@@ -45,7 +45,7 @@ def create_app():
     async def enrich_item_endpoint(request_body: dict):
         """
         Endpoint to enrich an item using configured LLM tasks.
-        The request_body is adapted to item and task_type by LLMRequestAdapter.
+        The request_body is adapted to an item dictionary and a task type by LLMRequestAdapter.
         """
         try:
             item, task_type = request_adapter.adapt(request_body)
