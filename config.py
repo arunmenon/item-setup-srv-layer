@@ -7,6 +7,17 @@ def _str_to_bool(val: str) -> bool:
     """
     return val.lower() in ("true", "yes", "1")
 
+
+# By default, SQLite (for local dev/testing)
+DEFAULT_DATABASE_URL = "sqlite:///results.db"
+#usage
+#export DATABASE_URL="mssql+pyodbc://myuser:mypassword@myserver.database.windows.net:1433/mydbname?driver=ODBC+Driver+17+for+SQL+Server"
+
+# Or you can set 'DATABASE_URL' in your environment for Azure SQL:
+# e.g. export DATABASE_URL="mssql+pyodbc://username:password@yourserver.database.windows.net:1433/yourDB?driver=ODBC+Driver+17+for+SQL+Server"
+
+DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+
 # 1) Fallback defaults for local development
 DEFAULT_USE_CACHE = False
 DEFAULT_CACHE_FQDN = "localhost:11211"

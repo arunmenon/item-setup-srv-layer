@@ -2,6 +2,7 @@
 import logging
 from fastapi import FastAPI, HTTPException
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
 from models.database import engine
 
 # Pydantic schemas
@@ -34,6 +35,8 @@ def create_app():
     """
     Factory function to create and configure the FastAPI application.
     """
+    # Dynamically create engine based on config
+    engine = create_engine(config.DATABASE_URL, echo=False)
     SessionLocal = sessionmaker(bind=engine)
     db_session = SessionLocal()
 
