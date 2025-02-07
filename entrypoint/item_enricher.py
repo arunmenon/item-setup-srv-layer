@@ -84,7 +84,7 @@ class ItemEnricher:
         specs = {}
         for attr in certified_attrs:
             specs[attr] = self.ae_scope_list_repo.get_attribute_spec(product_type, attr)
-        item['attribute_specs'] = specs
+        item["attribute_spec_list"] = specs
         self.logger.debug(f"Loaded certified attributes and specs for product_type='{product_type}': {certified_attrs}")
 
     def _prepare_prompts_tasks(self, prompts_per_family):

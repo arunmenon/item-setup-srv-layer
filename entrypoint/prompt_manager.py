@@ -70,7 +70,7 @@ class PromptManager:
             'product_type': product_type,
             'image_url': item.get('image_url', ''),
             'attributes_list': item.get('attributes_list', []),
-            'attribute_specs': item.get('attribute_specs', {}),
+            'attribute_spec_list': item.get('attribute_spec_list', {}),
             'output_format': 'json'
         }
         return {k: v for k, v in context.items() if v}
