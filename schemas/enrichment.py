@@ -1,39 +1,76 @@
 # schemas/enrichment.py
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List, Optional, Any
+from pydantic import BaseModel, Field, validator
 
-class EnrichItemRequest(BaseModel):
+class ProductIdentifier(BaseModel):
     """
-    Input model for enrichment.
+    Represents an identifier for the product (e.g. GTIN).
     """
-    title: str = Field(..., description="Title of the item.")
-    short_desc: str = Field(..., description="Short description of the item.")
-    long_desc: str = Field(..., description="Long description of the item.")
-    product_type: str = Field(..., description="Category/type of the item.")
+    id_type: str = Field(..., description="Type of ID, e.g. 'GTIN'")
+    id: str = Field(..., description="Actual identifier string")
 
-    # Optional fields
-    blurb: Optional[str] = Field("", description="Optional marketing blurb or tagline.")
-    image_url: Optional[str] = Field("", description="Optional URL to an image for the item.")
-    attributes_list: List[str] = Field(default_factory=list, description="Optional list of known attributes.")
-    task_type: str = Field("generation", description="Task type: 'generation' or 'evaluation'. Defaults to 'generation'.")
-
-
-class EnrichItemResponse(BaseModel):
+class Attributes(BaseModel):
     """
-    Represents the enriched output for the item.
+    Defines included or excluded attributes for enrichment.
     """
-    title_enrichment: Optional[str] = Field(None, description="Enriched or generated title.")
-    short_desc_enrichment: Optional[str] = Field(None, description="Enriched or generated short description.")
-    long_desc_enrichment: Optional[str] = Field(None, description="Enriched or generated long description.")
-    attributes_enrichment: List[AttributeEnrichment] = Field(
-        default_factory=list,
-        description="List of attribute-value pairs (e.g., color, size, etc.)"
-    )
+    inclusions: List[str] = []
+    exclusions: List[str] = []
+
+class PayloadItem(BaseModel):
+    """
+    Represents a single item in the multi-item request.
+    Includes product_identifier, specs, etc.
+    """
+    product_identifier: ProductIdentifier
+    spec_product_type: str
+    product_name: str
+    product_short_description: str
+    product_additional_description: str
+    main_image_url: Optional[str] = None
+    attributes: Optional[Attributes] = None
+    additional_data: Optional[dict] = {}
+
+    @validator("spec_product_type", "product_name", "product_short_description", "product_additional_description")
+    def not_empty(cls, v):
+        if not v:
+            raise ValueError("This field cannot be empty")
+        return v
+
+class MultiEnrichRequest(BaseModel):
+    """
+    The top-level multi-item request schema.
+    Example:
+    {
+      "spec_version": "1.0",
+      "tenant_id": 123,
+      "locale": "en_us",
+      "mart_id": 0,
+      "payload": [... list of PayloadItem ...]
+    }
+    """
+    spec_version: str
+    tenant_id: int
+    locale: str
+    mart_id: int
+    payload: List[PayloadItem]
+
+    @validator("spec_version", "locale")
+    def validate_string_fields(cls, v):
+        if not v:
+            raise ValueError("This field cannot be empty")
+        return v
 
 class AttributeEnrichment(BaseModel):
     """
-    Represents a single extracted attribute with its value.
-    For example: { "name": "color", "value": "red" }
+    Represents a single extracted attribute-value pair.
     """
-    name: str = Field(..., description="Name of the attribute.")
-    value: Any = Field(..., description="Extracted or generated value for the attribute.")
+    name: str
+    value: Any
+
+class MultiEnrichResponse(BaseModel):
+    """
+    Example multi-item response structure for all enriched items.
+    Adapt as needed for your final success/error layout.
+    """
+    status: str
+    data: Any  # Could store 'success' / 'errors' arrays, etc.

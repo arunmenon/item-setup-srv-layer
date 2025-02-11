@@ -5,15 +5,19 @@ import json
 
 class AEScopeListRepository:
     """
-    Handles attribute extraction metadata.
-    Provides methods to get certified attributes and attribute specifications.
+    Single source of truth for AE attribute specs from 'ae_inclusion_list'.
+    Now extended to include new columns:
+      - display_name
+      - taxonomy_key
+    If your colleague needed more columns, add them here.
     """
     def __init__(self, db_session: Session):
         self.db_session = db_session
 
     def get_certified_attributes(self, product_type: str) -> List[str]:
         """
-        Returns a list of certified attribute names for the given product type.
+        Returns a list of certified attribute names for the given product type,
+        reading 'ae_inclusion_list' with 'certified=1'.
         """
         sql = """
         SELECT attribute_name
@@ -26,18 +30,8 @@ class AEScopeListRepository:
 
     def get_attribute_spec(self, product_type: str, attribute_name: str) -> Dict[str, Any]:
         """
-        Returns the full specification for a given attribute, merging:
-          - The 'spec' JSON column (if present)
-          - Additional columns like closed_list, multi_select, acceptable_values, example_values, etc.
-        
-        The returned dictionary might look like:
-        {
-          "closed_list": True or False,
-          "multi_select": True or False,
-          "acceptable_values": "...",
-          "example_values": "...",
-          ... # plus any keys from the 'spec' JSON
-        }
+        Merges the 'spec' JSON column with additional columns:
+          closed_list, multi_select, acceptable_values, example_values, display_name, taxonomy_key
         """
         sql = """
         SELECT
@@ -45,7 +39,9 @@ class AEScopeListRepository:
             closed_list,
             multi_select,
             acceptable_values,
-            example_values
+            example_values,
+            display_name,
+            taxonomy_key
         FROM ae_inclusion_list
         WHERE product_type = :ptype
           AND attribute_name = :attr
@@ -56,37 +52,22 @@ class AEScopeListRepository:
             return {}
 
         result: Dict[str, Any] = {}
-
-        # 1) Merge the 'spec' JSON (if present)
         if row["spec"]:
             try:
-                spec_data = json.loads(row["spec"])
-                # Merge keys from spec_data into result
-                result.update(spec_data)
+                result.update(json.loads(row["spec"]))
             except Exception:
-                pass  # If parsing fails, just ignore the 'spec' content
+                pass
 
-        # 2) Add other columns (closed_list, multi_select, etc.)
-        #    You may need to convert "Yes"/"No" => boolean if that's how it's stored in DB
-        #    For instance, if row["closed_list"] is "No", we can map that to False, etc.
-        #    Otherwise, if it is already boolean, just assign directly.
+        def to_bool(val):
+            if isinstance(val, str):
+                return val.lower() == "yes"
+            return val
 
-        # Example: convert "Yes" => True, "No" => False if needed.
-        closed_list_str = row["closed_list"]
-        if isinstance(closed_list_str, str):
-            result["closed_list"] = (closed_list_str.lower() == "yes")
-        else:
-            # If it's already boolean in the DB, just do:
-            result["closed_list"] = row["closed_list"]
-
-        # Similarly for multi_select
-        multi_select_str = row["multi_select"]
-        if isinstance(multi_select_str, str):
-            result["multi_select"] = (multi_select_str.lower() == "yes")
-        else:
-            result["multi_select"] = row["multi_select"]
-
+        result["closed_list"] = to_bool(row["closed_list"])
+        result["multi_select"] = to_bool(row["multi_select"])
         result["acceptable_values"] = row["acceptable_values"]
         result["example_values"] = row["example_values"]
+        result["display_name"] = row["display_name"] or attribute_name
+        result["taxonomy_key"] = row["taxonomy_key"] or attribute_name.lower()
 
         return result
